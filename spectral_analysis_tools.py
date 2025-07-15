@@ -4,43 +4,22 @@ import scipy.special as spec
 from scipy.stats.mstats import gmean
 from matplotlib.colors import to_rgb, LinearSegmentedColormap, LogNorm
 from functools import partial
-from multiprocessing import Pool,cpu_count
+from multiprocessing import Pool, cpu_count
 from numpy.random import rand, randn
+import logging
 
 #----------------Miscellaneous--------------------
-class clock:
-    """Print a progress bar for a loop.
 
-    Usage:
-        my_clock = clock()
-        for i in range(N):
-            my_clock.update(i, N)
-            ...
-    """
+logger = logging.getLogger(__name__)
 
-    def __init__(self, message=''):
-        self.width = 40
-        self.progress = 0
-        self.message = message # appears to the right
-        self._print_clock()
-
-    def _print_clock(self):
-        print(' Progress: [' + self.progress*'#' \
-              + (self.width-self.progress)*'.' + '] ' + self.message,
-              end='\r', flush=True)
-        if self.progress == self.width:
-            print('\r')
-
-    def update(self, indx, N):
-        width = self.width
-        p = int(np.floor(float(indx+1)/float(N)*self.width))
-        if p > self.progress:
-            self.progress = p
-            self._print_clock()
-
-    def update_message(self, message):
-        self.message = message
-        self._print_clock()
+def _configure_logger(verbose: bool):
+    """Configure and return module logger."""
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO if verbose else logging.WARNING)
+    return logger
 
 def lighten_color(color, amount=0.5):
     """
@@ -192,7 +171,7 @@ def P_Lambdaf_D(Lambda_f, bLambda_f, M, i_f, Nf):
 
     return np.exp(res_log)
 
-def PSD(x, dt, Ndist=200, f_lims = None, mode='mle', return_P=False, tol=0.1, verbose=True):
+def PSD(x, dt, Ndist=200, f_lims=None, mode='mle', return_P=False, tol=0.1, verbose=True):
     """Calculate auto_corr. functions with error bars.
 
     Input:
@@ -220,9 +199,9 @@ def PSD(x, dt, Ndist=200, f_lims = None, mode='mle', return_P=False, tol=0.1, ve
     Lambda = np.nan * np.ones(Nf)
     Lambda_ci = np.nan * np.ones((Nf,2))
     
+    logger = _configure_logger(verbose)
     if verbose:
-        print('M =',M)
-        ac_clock = clock('Calculating auto corr.')
+        logger.info('M = %s', M)
     for i_f in range(Nf):
         if f_flt[i_f]:
             Lambda_uplim = Lambda_mle[i_f] # domain upper limit
@@ -243,7 +222,7 @@ def PSD(x, dt, Ndist=200, f_lims = None, mode='mle', return_P=False, tol=0.1, ve
                 
             Lambda_ci[i_f] = confidence_ivals_log(P_Lambda[i_f, 0],dL*dt,P_Lambda[i_f, 1],tol/2,Lambda[i_f])
             if verbose:
-                ac_clock.update(np.sum(f_flt[:i_f]), np.sum(f_flt))
+                logger.info('Calculating auto corr. %d/%d', int(np.sum(f_flt[:i_f])) + 1, int(np.sum(f_flt)))
     
         
     result = {'freq': freq[f_flt], 'Lambda': Lambda[f_flt], 'Lambda_ci': Lambda_ci[f_flt]}
@@ -257,8 +236,8 @@ def PSD(x, dt, Ndist=200, f_lims = None, mode='mle', return_P=False, tol=0.1, ve
 
 #----------------Auto-correlations clustered--------------------
 
-def PSD_clus(x, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,\
-             return_P=False, mode='mle',verbose=True):
+def PSD_clus(x, dt=1, N_x=100, N_y=100, tol=0.1, f_lims=None,
+             return_P=False, mode='mle', verbose=True):
     """Calculate clustered auto-correlation distributions and estimators.
 
     Input:
@@ -296,12 +275,13 @@ def PSD_clus(x, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,\
     dL = Lambda_vec[1:]-Lambda_vec[:-1]
     Lambda_vec = np.sqrt(Lambda_vec[1:]*Lambda_vec[:-1])
     
+    logger = _configure_logger(verbose)
     for i in range(len(freq[f_flt])):
-        bi= x_dig[i]
+        bi = x_dig[i]
         bin_cntx[bi] += 1
         Q_pcolor[bi] += bLambda[i+1]
     if verbose:
-        my_clock = clock('Calculating clustered auto corr.')
+        logger.info('Calculating clustered auto corr.')
     for bi in range(N_x):
         if bin_cntx[bi] != 0:
             QQ=Q_pcolor[bi]/bin_cntx[bi]
@@ -315,7 +295,8 @@ def PSD_clus(x, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,\
             else: Lambda[bi] = Lambda_vec[np.argmax(F_pcolor[bi, 1])]
 
             Lambda_ci[bi]=confidence_ivals_log(Lambda_vec,dL,F_pcolor[bi,1],tol/2,Lambda[bi])
-        if verbose: my_clock.update(bi, N_x)
+        if verbose:
+            logger.info('Clustered auto corr. %d/%d', bi + 1, N_x)
                 
     result = {'freq': 10**x_bins[bin_cntx>0], 'Lambda': Lambda[bin_cntx>0]*dt, 'Lambda_ci':Lambda_ci[bin_cntx>0]*dt, 'Lambda_vec':Lambda_vec*dt, 'M_eff':M*bin_cntx[bin_cntx>0]}        
     if return_P: result.update({'P_Lambda': F_pcolor[bin_cntx>0,1,:]})
@@ -528,7 +509,7 @@ def find_max_phi(L=1,m=1,bsf=0.5,dphif=0,x0=1e-37):
         return (m-3/4)/x-7/4/(x+1)+2*m*np.cos(dphif)/L-m/L/bsf*(2*x+1)/np.sqrt(x*(x+1))
     return sp.optimize.root_scalar(pol,bracket=[1e-40,1e7],x0=1e-37,xtol=1e-40,maxiter=200,method='brentq').root
 
-def CSD(A, B, dt, Ndist=100, Ndist_phi=None, Ndist_sf=None, f_lims = None, tol=0.1, phase_center=0.5*np.pi,\
+def CSD(A, B, dt, Ndist=100, Ndist_phi=None, Ndist_sf=None, f_lims=None, tol=0.1, phase_center=0.5*np.pi,
         return_P=False, mode='mle', verbose=True):
     """Calculate cross-correlation distributions and estimators.
 
@@ -579,14 +560,15 @@ def CSD(A, B, dt, Ndist=100, Ndist_phi=None, Ndist_sf=None, f_lims = None, tol=0
     phif_ci = np.nan * np.ones([Nf,2])
     P_Lambda = np.nan * np.ones((Nf, 2, Ndist)) # [freq, Lambda or P(Lambda), i_Lambda]
 
-    print('M =',M)
+    logger = _configure_logger(verbose)
     if verbose:
-        my_clock = clock('Calculating cross corr.')
+        logger.info('M = %s', M)
+        logger.info('Calculating cross corr.')
     for i_f in range(len(freq)):
         m=Df(i_f,Nf)*(M-1.*(i_f==0))
         if f_flt[i_f]:
             if verbose:
-                my_clock.update(np.sum(f_flt[:i_f]), len(freq[f_flt]))
+                logger.info('Calculating cross corr. %d/%d', int(np.sum(f_flt[:i_f])) + 1, int(len(freq[f_flt])))
             Lambda_uplim = 1 # domain upper limit
             logP_ref = logP_LambdaAB(1,m,bsf[i_f])
             while (logP_LambdaAB(Lambda_uplim,m,bsf[i_f])-logP_ref)> np.log(1.e-2):
@@ -655,8 +637,8 @@ def CSD(A, B, dt, Ndist=100, Ndist_phi=None, Ndist_sf=None, f_lims = None, tol=0
 
 #----------------Cross-correlations clustered--------------------
 
-def CSD_clus(A, B, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,phase_center=0.5*np.pi,\
-             return_P=False, mode='mle',verbose=True):
+def CSD_clus(A, B, dt=1, N_x=100, N_y=100, tol=0.1, f_lims=None, phase_center=0.5*np.pi,
+             return_P=False, mode='mle', verbose=True):
     """Calculate cross-correlation distributions and estimators.
 
     Input:
@@ -719,15 +701,16 @@ def CSD_clus(A, B, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,phase_center=0.
     Lambda_vec = 10**Lambda_vec
     dL=Lambda_vec[1:]-Lambda_vec[:-1]
     Lambda_vec = np.sqrt(Lambda_vec[1:]*Lambda_vec[:-1])
+    logger = _configure_logger(verbose)
     for i in range(len(freq[f_flt])):
-        bi= x_dig[i]
+        bi = x_dig[i]
         bin_cntx[bi] += 1
         Qcos_pcolor[bi] += Qcos[i+1]
         Qsin_pcolor[bi] += Qsin[i+1]
         QA_pcolor[bi] += bLambda_A[i+1]
         QB_pcolor[bi] += bLambda_B[i+1]
     if verbose:
-        my_clock = clock('Clustered cross corr.')
+        logger.info('Clustered cross corr.')
     for bi in range(N_x):
         if bin_cntx[bi] != 0:
             QQc=Qcos_pcolor[bi]/bin_cntx[bi]
@@ -757,7 +740,7 @@ def CSD_clus(A, B, dt=1, N_x=100,N_y=100, tol=0.1, f_lims = None,phase_center=0.
         F_pcolor_norm[bi]=F_pcolor_norm[bi]/(sf_vec[1]*dphif*np.nansum(F_pcolor_norm[bi],axis=(0,1)))
         
         if verbose:
-                my_clock.update(bi, N_x)
+            logger.info('Clustered cross corr. %d/%d', bi + 1, N_x)
                 
     P_sf=np.sum(F_pcolor_norm,axis=1)*dphif
     for i in range(len(P_sf[:,0])):
